@@ -1,81 +1,77 @@
 import time
-import redis
-import string
-import random
-from PIL import Image
 import io
+from PIL import Image
+import redis
+
+# Configuration
+topic = "Test"
+num_messages = 10000
+message_size = 1024  # in bytes
+interval = 1  # in seconds
 
 # Connect to Redis
 redis_client = redis.Redis(host='localhost', port=6379, db=0)
 
-# Subscribe to test channel
-pubsub = redis_client.pubsub()
-pubsub.subscribe('test_channel')
+# Subscribe to the topic
+subscriber = redis_client.pubsub()
+subscriber.subscribe(topic)
 
-# Generate a large message (10 MB)
-message_size = 10 * 1024 * 1024
-large_message = ''.join(random.choice(string.ascii_letters) for _ in range(message_size))
+# Wait for the subscriber to connect
+time.sleep(1)
 
-# Publish messages
-num_messages = 100
+# Send messages from the publisher and calculate latency, throughput, and max message size
+latency_total = 0
+start_time = time.time()
+max_message_size = 0
 for i in range(num_messages):
     # Integer message
-    int_message = {'type': 'integer', 'data': i, 'timestamp': time.time()}
-    redis_client.publish('test_channel', str(int_message))
+    message_int = i
+    message_start_time = time.time()
+    redis_client.publish(topic, message_int)
+    message_end_time = time.time()
+    latency = (message_end_time - message_start_time) * 1000  # convert to milliseconds
+    latency_total += latency
+    if len(str(message_int).encode()) > max_message_size:
+        max_message_size = len(str(message_int).encode())
 
     # String message
-    str_message = {'type': 'string', 'data': f'message {i}', 'timestamp': time.time()}
-    redis_client.publish('test_channel', str(str_message))
+    message_str = "This is a string message #" + str(i)
+    message_start_time = time.time()
+    redis_client.publish(topic, message_str)
+    message_end_time = time.time()
+    latency = (message_end_time - message_start_time) * 1000  # convert to milliseconds
+    latency_total += latency
+    if len(message_str.encode()) > max_message_size:
+        max_message_size = len(message_str.encode())
 
     # Image message
-    image_file = 'icon.png'
-    with open(image_file, 'rb') as f:
-        image_data = f.read()
+    image_file = "icon.png"
+    with open(image_file, "rb") as f:
+        image_bytes = f.read()
+    image = Image.open(io.BytesIO(image_bytes))
+    message_start_time = time.time()
+    redis_client.publish(topic, image_bytes)
+    message_end_time = time.time()
+    latency = (message_end_time - message_start_time) * 1000  # convert to milliseconds
+    latency_total += latency
+    if len(image_bytes) > max_message_size:
+        max_message_size = len(image_bytes)
 
-    # Convert image data to bytes string
-    image_bytes = io.BytesIO(image_data)
-    image_str = image_bytes.read()
+end_time = time.time()
+elapsed_time = end_time - start_time
+throughput = num_messages / elapsed_time
+avg_latency = latency_total / (3*num_messages) # 3 messages are sent in each iteration of the loop (integer, string, and image)
 
-    # Send image message
-    image_message = {'type': 'image', 'data': image_str, 'timestamp': time.time()}
-    redis_client.publish('test_channel', str(image_message))
+# Print results
+print("Test results:")
+print("-" * 70)
+print("Elapsed time: {:.3f} seconds".format(elapsed_time))
+print("Number of messages: {}".format(num_messages))
+print("Interval between messages: {} seconds".format(interval))
+print("Throughput: {:.3f} messages per second".format(throughput))
+print("Average latency: {:.3f} milliseconds".format(avg_latency))
+print("Maximum message size: {} bytes".format(max_message_size))
 
-# Get messages and calculate latency
-latency_sum = 0
-for i in range(num_messages * 3):
-    message = pubsub.get_message()
-    if message and message['type'] == 'message':
-        message_data = eval(message['data'])
-        latency = (time.time() - float(message_data['timestamp'])) * 1000
-        latency_sum += latency
-
-# Calculate average latency
-avg_latency = latency_sum / (num_messages * 3)
-print(f'Redis pub/sub latency: {avg_latency:.2f} ms')
-
-
-# Testing throughput
-message_size = 100000
-total_messages = 1000
-
-start_time = time.time()
-
-for i in range(total_messages):
-        message = ''.join(random.choices(string.ascii_uppercase + string.digits, k=message_size))
-        redis_client.publish("test", message)
-
-elapsed_time = time.time() - start_time
-print(f"Throughput: {total_messages / elapsed_time:.2f} messages per second")
-
-# Testing maximum size of data
-message_size = 10000
-message = ''.join(random.choices(string.ascii_uppercase + string.digits, k=message_size))
-
-try:
-        redis_client.publish("test", message)
-        print("Successfully published message of maximum size")
-except redis.exceptions.ResponseError:
-        print("Failed to publish message of maximum size")
-
-
-
+# Unsubscribe from the topic and close the Redis connection
+subscriber.unsubscribe(topic)
+redis_client.close()
